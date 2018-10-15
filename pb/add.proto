@@ -1,0 +1,15 @@
+syntax = "proto3";
+package pb;
+
+service Counter {
+    rpc Add(AddRequest) returns (AddResponse) {}
+}
+
+message AddRequest {
+    int32 number = 1;
+}
+
+message AddResponse {
+    int32 number = 1;
+    string err = 2;
+}

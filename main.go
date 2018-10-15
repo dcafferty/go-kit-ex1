@@ -1,47 +1,110 @@
 package main
 
 import (
+	"context"
+	"errors"
 	_ "expvar"
-	"net/http"
+	"fmt"
+	"net"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
+	pb "github.com/dcafferty/go-kit-ex1/pb"
+	"github.com/go-kit/kit/endpoint"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/metrics/expvar"
-	krl "github.com/go-kit/kit/ratelimit"
-	kth "github.com/go-kit/kit/transport/http"
+	grpctransport "github.com/go-kit/kit/transport/grpc"
 	"github.com/juju/ratelimit"
+	grpc "google.golang.org/grpc"
 )
 
 func main() {
 	logger := log.NewLogfmtLogger(os.Stdout)
 
-	var c countService
-	svc := makeAddEndpoint(&c)
+	var svc pb.CounterClient
+	c := &grpcServer{}
+	svc = Endpoints{
+		CounterEndpoint: makeAddEndpoint(c)}
 
 	limit := ratelimit.NewBucket(2*time.Second, 1)
-	svc = krl.NewTokenBucketLimiter(limit)(svc)
 
 	requestCount := expvar.NewCounter("request.count")
-	svc = metricsMiddleware(requestCount)(svc)
+
 	svc = loggingMiddlware(logger)(svc)
 
-	http.Handle("/add",
-		kth.NewServer(
-			svc,
-			decodeAddRequest,
-			encodeResponse,
-			kth.ServerBefore(beforeIDExtractor, beforePATHExtractor),
-		),
-	)
+	errChan := make(chan error)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	// endpoints := Endpoints{
+	// 	CounterEndpoint: makeAddEndpoint(&c),
+	// }
+	//execute grpc server
+	go func() {
+		listener, err := net.Listen("tcp", "0.0.0.0:51251")
+		if err != nil {
+			errChan <- err
+			return
+		}
+		handler := &grpcServer{
+			grpctransport.NewServer(
+				svc,
+				DecodeGRPCAddRequest,
+				EncodeGRPCAddResponse,
+			),
+		}
+		gRPCServer := grpc.NewServer()
+		pb.RegisterCounterServer(gRPCServer, svc)
+		errChan <- gRPCServer.Serve(listener)
+	}()
 
-	logger.Log("listening-on", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		logger.Log("listen.error", err)
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+		errChan <- fmt.Errorf("%s", <-c)
+	}()
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+		errChan <- fmt.Errorf("%s", <-c)
+	}()
+
+	// http.Handle("/add",
+	// 	kth.NewServer(
+	// 		svc,
+	// 		decodeAddRequest,
+	// 		encodeResponse,
+	// 		kth.ServerBefore(beforeIDExtractor, beforePATHExtractor),
+	// 	),
+	// )
+
+	// port := os.Getenv("PORT")
+	// if port == "" {
+	// 	port = "8080"
+	// }
+
+	// logger.Log("listening-on", port)
+	// if err := http.ListenAndServe(":"+port, nil); err != nil {
+	// 	logger.Log("listen.error", err)
+	// }
+}
+
+// endpoints wrapper
+type Endpoints struct {
+	CounterEndpoint endpoint.Endpoint
+}
+
+func (e Endpoints) Add(ctx context.Context, in *pb.AddRequest, opts ...grpc.CallOption) (*pb.AddResponse, error) {
+	req := addRequest{int(in.Number)}
+
+	resp, err := e.CounterEndpoint(ctx, req)
+	if err != nil {
+		return nil, err
 	}
+	addResponse := resp.(pb.AddResponse)
+	if addResponse.Err != "" {
+		return &pb.AddResponse{int32(0), addResponse.Err}, errors.New(addResponse.Err)
+	}
+	return &addResponse, nil
 }
