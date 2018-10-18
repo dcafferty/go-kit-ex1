@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	pb "github.com/dcafferty/go-kit-ex1/pb"
-	"github.com/go-kit/kit/endpoint"
 	grpctransport "github.com/go-kit/kit/transport/grpc"
 )
 
@@ -26,37 +25,16 @@ func (r addResponse) String() string {
 	return fmt.Sprintf("%d", r.V)
 }
 
-func makeAddEndpoint(svc Counter) endpoint.Endpoint {
-	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		req := request.(pb.AddRequest)
-		v, err := svc.Add(ctx, &req)
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
-	}
-}
-
-//Encode and Decode Counter Request
-func EncodeGRPCAddRequest(_ context.Context, r interface{}) (interface{}, error) {
-	req := r.(addRequest)
-	return &pb.AddRequest{int32(req.V)}, nil
-}
-
 func DecodeGRPCAddRequest(_ context.Context, r interface{}) (interface{}, error) {
 	req := r.(*pb.AddRequest)
+
 	return addRequest{int(req.Number)}, nil
 }
 
 //Encode and Decode Counter Request
 func EncodeGRPCAddResponse(_ context.Context, r interface{}) (interface{}, error) {
 	res := r.(addResponse)
-	return &pb.AddRequest{int32(res.V)}, nil
-}
-
-func DecodeGRPCAddResponse(_ context.Context, r interface{}) (interface{}, error) {
-	req := r.(*pb.AddResponse)
-	return addRequest{int(req.Number)}, nil
+	return &pb.AddResponse{int32(res.V), res.Err}, nil
 }
 
 type grpcServer struct {
@@ -64,7 +42,7 @@ type grpcServer struct {
 }
 
 func (s *grpcServer) Add(ctx context.Context, r *pb.AddRequest) (*pb.AddResponse, error) {
-	_, resp, err := s.Counter.ServeGRPC(ctx, r)
+	ctx, resp, err := s.Counter.ServeGRPC(ctx, r)
 	if err != nil {
 		return nil, err
 	}

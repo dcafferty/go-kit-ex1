@@ -4,7 +4,7 @@ import "sync"
 
 // Counter adds a value and returns a new value
 type Counter interface {
-	Add(int) int
+	Add(addRequest) addResponse
 }
 
 type countService struct {
@@ -12,9 +12,9 @@ type countService struct {
 	mu sync.Mutex
 }
 
-func (c *countService) Add(v int) int {
+func (c *countService) Add(v addRequest) addResponse {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.v += v
-	return c.v
+	c.v += v.V
+	return addResponse{c.v, ""}
 }

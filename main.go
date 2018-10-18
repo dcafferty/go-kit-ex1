@@ -2,35 +2,29 @@ package main
 
 import (
 	"context"
-	"errors"
 	_ "expvar"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	pb "github.com/dcafferty/go-kit-ex1/pb"
 	"github.com/go-kit/kit/endpoint"
 	"github.com/go-kit/kit/log"
-	"github.com/go-kit/kit/metrics/expvar"
 	grpctransport "github.com/go-kit/kit/transport/grpc"
-	"github.com/juju/ratelimit"
 	grpc "google.golang.org/grpc"
 )
 
 func main() {
 	logger := log.NewLogfmtLogger(os.Stdout)
 
-	var svc pb.CounterClient
-	c := &grpcServer{}
-	svc = Endpoints{
-		CounterEndpoint: makeAddEndpoint(c)}
+	// var svc pb.CounterServer
+	c := &countService{}
+	var svc endpoint.Endpoint
+	svc = makeAddEndpoint(c)
 
-	limit := ratelimit.NewBucket(2*time.Second, 1)
-
-	requestCount := expvar.NewCounter("request.count")
+	// requestCount := expvar.NewCounter("request.count")
 
 	svc = loggingMiddlware(logger)(svc)
 
@@ -46,7 +40,7 @@ func main() {
 			errChan <- err
 			return
 		}
-		handler := &grpcServer{
+		addHandler := &grpcServer{
 			grpctransport.NewServer(
 				svc,
 				DecodeGRPCAddRequest,
@@ -54,7 +48,7 @@ func main() {
 			),
 		}
 		gRPCServer := grpc.NewServer()
-		pb.RegisterCounterServer(gRPCServer, svc)
+		pb.RegisterCounterServer(gRPCServer, addHandler)
 		errChan <- gRPCServer.Serve(listener)
 	}()
 
@@ -70,6 +64,12 @@ func main() {
 		errChan <- fmt.Errorf("%s", <-c)
 	}()
 
+	select {
+	case err := <-errChan:
+		panic(err)
+		close(errChan)
+	}
+	close(errChan)
 	// http.Handle("/add",
 	// 	kth.NewServer(
 	// 		svc,
@@ -95,16 +95,28 @@ type Endpoints struct {
 	CounterEndpoint endpoint.Endpoint
 }
 
-func (e Endpoints) Add(ctx context.Context, in *pb.AddRequest, opts ...grpc.CallOption) (*pb.AddResponse, error) {
-	req := addRequest{int(in.Number)}
+func makeAddEndpoint(svc Counter) endpoint.Endpoint {
+	return func(ctx context.Context, request interface{}) (interface{}, error) {
+		req := request.(addRequest)
+		v := svc.Add(req)
 
-	resp, err := e.CounterEndpoint(ctx, req)
+		return v, nil
+	}
+}
+
+func (e Endpoints) Add(ctx context.Context, request interface{}) (result interface{}, err error) {
+	// func (e Endpoints) Add(ctx context.Context, in *pb.AddRequest, opts ...grpc.CallOption) (*pb.AddResponse, error) {
+	in := request.(addRequest)
+	// req := addRequest{int(in.Number)}
+	// req := addRequest{int(in.Number)}
+
+	resp, err := e.CounterEndpoint(ctx, &in)
 	if err != nil {
 		return nil, err
 	}
-	addResponse := resp.(pb.AddResponse)
-	if addResponse.Err != "" {
-		return &pb.AddResponse{int32(0), addResponse.Err}, errors.New(addResponse.Err)
+
+	if err != nil {
+		return nil, err
 	}
-	return &addResponse, nil
+	return resp, nil
 }
